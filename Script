@@ -103,7 +103,7 @@ for user in range(150):
 df = pd.DataFrame(books, columns = ['User','Book','Author', 'Rating'])
 df = df.dropna()
 
-data = df.to_csv('data_goodReads2.csv', index=False)
+data = df.to_csv('GoodReads_Data.csv', index=False)
 
 
 ######################################################
