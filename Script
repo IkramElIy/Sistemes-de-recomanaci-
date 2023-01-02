@@ -1,0 +1,1427 @@
+######################################################
+############# WEB SCAPPING ###########################
+######################################################
+
+import pandas as pd
+import requests
+import numpy as np
+from bs4 import BeautifulSoup
+import re
+import matplotlib.pyplot as plt
+import math
+from scipy.sparse import coo_matrix
+from numpy.linalg import norm
+
+
+url_gen='https://www.goodreads.com/genres/childrens?original_shelf=children-s'
+
+response_gen = requests.get(url_gen)
+
+soup_gen = BeautifulSoup(response_gen.content, 'html.parser')
+books_gen=soup_gen.findAll('div',attrs={'class': 'coverWrapper'})
+
+links_gen = []
+
+for i in books_gen:
+    
+    name = i.a
+    links_gen.append(str(name))
+    
+ books_ids = []
+
+for p in range(len(links_gen)):
+
+    html_p = links_gen[p]
+    soup_p = BeautifulSoup(html_p, 'lxml')
+    tag_p = soup_p.find('a')
+    tag2_p = tag_p.attrs.get('href', 'Not found')
+    books_ids.append(tag2_p)
+    
+urll = 'https://www.goodreads.com'
+users =[]
+
+for s in range(10):
+
+    response = requests.get(urll+books_ids[s])
+    soup = BeautifulSoup(response.content, 'html.parser')
+    users.append(soup.findAll('a',attrs={'class': 'left imgcol'}))
+    
+link_usr = []
+
+for lin in users:
+    
+    for i in range(len(lin)):
+    
+        tag = lin[i].attrs.get('href', 'Not found')
+        link_usr.append(tag[11:])
+        
+ url_p='https://www.goodreads.com/review/list/'
+
+p =0
+
+    
+books = { 'User': [],
+          'Book': [],
+          'Rating': [],
+          'Author': []        }    
+
+for user in range(150):
+    
+    for page in range(1,6):  
+
+        req = requests.get(url_p + str(link_usr[user]) + '?page='+str(page)+'?order=d&page=2&shelf=read&sort=random&utf8=✓')
+        soup_rew = BeautifulSoup(req.content, 'html.parser')
+        books_name_ = soup_rew.findAll('td',attrs={'class': 'field title'})
+
+        for f in range(len(books_name_)):
+
+            name_2 = books_name_[f].a.text
+            books["Book"].append(name_2.replace("\n", ""))
+
+
+        ratings = soup_rew.findAll('td',attrs={'class': 'field rating'})
+
+        
+        for t in ratings:
+            books["Rating"].append(t.span.text)
+
+        author = soup_rew.findAll('td',attrs={'class': 'field author'})
+
+        for y in author:
+
+            name_auth = y.div.a.text
+            books["Author"].append(name_auth)
+
+        if len(books_name_)>0:
+
+            books["User"].extend([p]*len(books_name_))
+            p=p+1
+            
+            
+            
+            
+df = pd.DataFrame(books, columns = ['User','Book','Author', 'Rating'])
+df = df.dropna()
+
+data = df.to_csv('data_goodReads2.csv', index=False)
+
+
+######################################################
+#############  DESCRIPTIVA ###########################
+######################################################
+
+import seaborn as sns
+from sklearn.metrics import accuracy_score
+import itertools
+from sklearn import metrics
+
+data = pd.read_csv("GoodReads_Data.csv",sep = ';')
+data2 = pd.read_csv("GoodReads_Data.csv",sep = ';')
+
+plt.subplots(figsize=(7,5))
+sns.countplot(data["Rating"])
+
+data.nunique() 
+
+######################################################
+######### MÈTODE SIMILARITAT ENTRE USUARIS ###########
+######################################################
+
+
+table = data.pivot_table(index='User',columns='Book_id', values='Rating')
+matrix = np.array(data.pivot_table(index='User',columns='Book_id', values='Rating')) #per calculs posteriors.
+
+np.isnan(matrix).sum()/np.prod(matrix.shape)   #Sparcity
+
+mean_group=data.groupby('User').mean()
+mean_item =data2.groupby('Book_id').mean()
+mean_g = mean_group.Rating.tolist()
+mean_item.rename(columns = {'Rating':'Mean_rating'}, inplace = True)
+
+matrix_norm = table.subtract(table.mean(axis=1), axis='rows').fillna(0)
+data['Rating'] = data['Rating'].sub(data.groupby('User')['Rating'].transform('mean'))
+
+
+
+pearson_user=matrix_norm.T.corr()
+from matplotlib.pyplot import figure
+
+figure(figsize=(8,10))
+plt.imshow(pearson_user, cmap = 'Blues')
+
+#Funció que evalua els rankings, segons el numero de veis:
+
+def ranking_user(c,corelation,K):
+    
+    global data
+    
+    dataInput = data.loc[data["User"] == c]
+    
+    dataInput_pred = dataInput[['Book_id', 'Rating']]
+    dataInput_pred.columns = ['Book_id', 'Predicció']
+    
+    data3 = data.loc[data["User"] != c] # base de dades sense usuari target
+
+    userSubset = data3[data3['Book_id'].isin(dataInput['Book_id'].tolist())] # identifiquem els usr que han valorat les mateixes 
+                                                                                #obres que el target.
+        
+    
+    usr = userSubset.User.tolist()
+    usr = pd.unique(usr).tolist() #identifiquem els usuaris
+
+    data_sim = {
+
+        'User': usr,
+        'Sim': corelation[c][usr].tolist()
+    }
+    
+    df_sim = pd.DataFrame(data_sim, columns = ['User','Sim'])
+
+    topUsers=df_sim.sort_values(by='Sim', ascending=False)[0:K] # Agafem els K usuaris mes similars.  
+    
+    historial = topUsers.merge(data3, left_on='User', right_on='User', how='inner') #historial complet
+    
+    #Calculem els ratings ponderats:
+    historial['weightedRating'] = historial['Sim']*historial['Rating']
+    historial= historial.groupby('Book_id').sum()[['Sim','weightedRating']]
+    historial.columns = ['sum_similarityIndex','sum_weightedRating']
+
+    recommendation_df= pd.DataFrame()
+    recommendation_df['Rating'] = historial['sum_weightedRating']/historial['sum_similarityIndex']
+    recommendation_df['Book_id'] = historial.index
+    recommendation_df=recommendation_df.sort_values(by='Rating', ascending=False)
+    recommendation_df=recommendation_df.reset_index(drop=True)
+    
+
+    return recommendation_df
+    
+ def evaluacio_user(c, pearson_user, K):
+    
+    global mean_g
+    
+    top_U=ranking_user(c, pearson_user, K)
+    
+    dataInput = data.loc[data["User"] == c]
+
+    
+    userSubset = dataInput[dataInput['Book_id'].isin(top_U['Book_id'].tolist())]
+    userSubset = userSubset.sort_values(by='Rating', ascending=False) #ordre ideal
+        
+    values = userSubset.Book_id.values.tolist() #llibres llegits
+
+    rank = []
+    rank_2=[]
+    rank_id=[]
+
+    
+    for i in values: 
+        
+        rank.append(list(top_U.Book_id).index(i))
+        rank_2.append(list(top_U.Book_id).index(i))
+        rank_id.append(list(userSubset.Book_id).index(i))
+            
+    rank_id.reverse()
+    rank_2.sort()
+    
+    dataframe_final = pd.DataFrame()
+    rank2 = pd.DataFrame()
+
+    dataframe_final["Book_id"] = userSubset["Book_id"] 
+    dataframe_final["Book"] = userSubset["Book"]
+    dataframe_final["Author"] = userSubset["Author"] 
+    dataframe_final["Rating_real"] = userSubset["Rating"] 
+    
+    dataframe_final["Ranking_sistema"] = [x+1 for x in rank]
+    dataframe_final["Ranking_Ideal"] = [x+1 for x in rank_id]
+    rank2["Ranking_sistema"]=[x+1 for x in rank_2]
+    rank2["Ranking_final"]= [x+1 for x in rank_id]
+
+    s=dataframe_final.merge(rank2, left_on='Ranking_sistema', right_on='Ranking_sistema', how='inner')
+    
+    s=s.merge(top_U, left_on='Book_id', right_on='Book_id', how='inner')
+    
+    
+    s["Rating_real"] = round(s["Rating_real"]+mean_g[c])
+    s["Rating"] = round(s["Rating"]+mean_g[c])
+    
+    s["Rating"][s["Rating"] > 5] = 5
+    s["Rating_real"][s["Rating_real"] > 5] = 5
+    s.drop('Ranking_sistema', inplace=True, axis=1)
+    
+    return s
+    
+# Metrica nDCG:    
+    
+def metric(user, K):
+
+    sistem_rank=evaluacio_user(user, pearson_user, K)
+    
+    DCG = 0
+    IDCG = 0
+
+    for i in range(len(sistem_rank)):
+        
+        DCG+=(2**(sistem_rank["Ranking_final"][i])-1)/math.log(i+2,2) #Sumem 2 encomptes de 1 perque els indexos cuadrin
+        IDCG+=(2**(sistem_rank["Ranking_Ideal"][i])-1)/math.log(i+2,2)
+
+    if IDCG>0:    
+        
+        return DCG/IDCG
+        
+        
+  K=[1,2,3,5,10,15,20,25,30,35,40,45,50]
+
+def K_tunning(K):
+    
+    nDCG_metric_estim= []
+
+    for k in K:
+        
+        nDCG_metric=[]
+
+        for i in range(114):
+
+            nDCG_metric.append(metric(i, k))
+
+        sum_metric=0
+
+        for i in nDCG_metric:
+
+            if i != None: sum_metric+=i
+
+        nDCG_metric_estim.append(sum_metric/len(nDCG_metric))
+    return nDCG_metric_estim
+    
+nDCG_K=K_tunning(K)
+K_tuning = pd.DataFrame()
+K_tuning["K"] = K
+K_tuning["nDCG"] = nDCG_K
+plt.plot(K_tuning["K"],K_tuning["nDCG"])
+plt.xlabel("K")
+plt.ylabel("nDCG")
+
+#### RMSE######
+
+def rmse(usr,K):
+    
+    r=evaluacio_user(usr, pearson_user, K=K)
+    MSE = np.square(np.subtract(r["Rating_real"],r["Rating"])).mean()         
+    return math.sqrt(MSE)
+    
+K=[1,2,3,5,10,15,20,25,30,35,40,45,50]
+
+def K_tunning_rmse(K):
+    
+    rmse_metric_estim= []
+
+    for k in K:
+        
+        rmse_metric=[]
+
+        for i in range(114):
+
+            rmse_metric.append(rmse(i, k))
+
+        rmse_metric_estim.append(np.nanmean(rmse_metric))
+        
+    return rmse_metric_estim
+    
+ rmse_k = K_tunning_rmse(K)
+ K=[1,2,3,5,10,15,20,25,30,35,40,45,50]
+
+K_tuning_rmse = pd.DataFrame()
+K_tuning_rmse["K"] = K
+K_tuning_rmse["rmse"] = rmse_k
+plt.plot(K_tuning_rmse["K"],K_tuning_rmse["rmse"])
+plt.xlabel("K")
+plt.ylabel("rmse")
+
+######## MRR ##############
+
+def K_tunning_MRR(K):
+
+    MRR_k =[]
+    
+    for k in K:
+        
+        sum_MRR =0
+        count = 0
+        
+        for g in range(114):
+            
+            r=evaluacio_user(g, pearson_user, k)
+            
+            if len(r)>0:
+                sum_MRR+=1/((list(r["Ranking_final"])).index(max(r["Ranking_Ideal"]))+1)
+                count+=1
+                
+        MRR_k.append(sum_MRR/count)
+        
+    return MRR_k
+    
+    
+K=[1,2,3,4,5,10,15,20,25,30,35,40,45,50]
+MRR_K = K_tunning_MRR(K)
+K_tuning_mrr = pd.DataFrame()
+K_tuning_mrr["K"] = K
+K_tuning_mrr["MRR"] = MRR_K
+plt.plot(K_tuning_mrr["K"],K_tuning_mrr["MRR"])
+plt.xlabel("K")
+plt.ylabel("MRR")
+
+##### ACCURACY ########3
+
+def real_cat(row):  
+    if row['Rating_real'] >= 3.5:
+        return 1
+    return 0
+
+def pred_cat(row):  
+    if row['Rating'] >= 3.5:
+        return 1
+    return 0
+    
+K=[1,2,3,4,5,10,15,20,25,30,35,40,45,50]
+accuracy=[]
+
+for k in K:
+
+    y_real_aux = []
+    y_pred_aux = []
+
+    for i in range(114):
+
+        t = evaluacio_user(i, pearson_user,k)
+
+        if len(t)>0:
+
+            t['Real_cat'] = t.apply(lambda row: real_cat(row), axis=1)
+            t['Pred_cat'] = t.apply(lambda row: pred_cat(row), axis=1)
+
+            y_real_aux.append(t['Real_cat'])
+            y_pred_aux.append(t['Pred_cat'])
+
+
+    y_real = []
+    y_pred = []
+
+    for i in range(len(y_real_aux)):
+
+        y_real.append(list(y_real_aux[i].values))
+        y_pred.append(list(y_pred_aux[i].values))
+
+    y_real = list(itertools.chain(*y_real))
+    y_pred = list(itertools.chain(*y_pred))
+    
+
+    accuracy.append(accuracy_score(y_real,y_pred))
+
+K_tuning_accuracy= pd.DataFrame()
+K_tuning_accuracy["K"] = K
+K_tuning_accuracy["Accuracy"] = accuracy
+plt.plot(K_tuning_accuracy["K"],K_tuning_accuracy["Accuracy"])
+plt.xlabel("K")
+plt.ylabel("Accuracy")
+
+####### ROC - AUC K =1 ###########
+
+y_real_aux = []
+y_pred_aux = []
+
+for i in range(114):
+
+    t = evaluacio_user(i, pearson_user,1)
+
+    if len(t)>0:
+
+        t['Real_cat'] = t.apply(lambda row: real_cat(row), axis=1)
+        t['Pred_cat'] = t.apply(lambda row: pred_cat(row), axis=1)
+
+        y_real_aux.append(t['Real_cat'])
+        y_pred_aux.append(t['Pred_cat'])
+
+
+y_real = []
+y_pred = []
+
+for i in range(len(y_real_aux)):
+
+    y_real.append(list(y_real_aux[i].values))
+    y_pred.append(list(y_pred_aux[i].values))
+
+y_real = list(itertools.chain(*y_real))
+y_pred = list(itertools.chain(*y_pred))
+
+
+fpr, tpr,_ = metrics.roc_curve(y_real,  y_pred)
+auc = metrics.roc_auc_score(y_real, y_pred)
+
+plt.plot(fpr,tpr,label="AUC="+str(auc))
+plt.ylabel('True Positive Rate')
+plt.xlabel('False Positive Rate')
+plt.legend(loc=4)
+plt.show()
+
+
+##### PRECISIÓ@10########
+
+def recom_final(c,corelation,K,n):
+    
+    global data2
+    
+    dataInput = data2.loc[data2["User"] == c]
+    
+    dataInput_pred = dataInput[['Book_id', 'Rating']]
+    dataInput_pred.columns = ['Book_id', 'Predicció']
+    
+    data3 = data2.loc[data2["User"] != c] # base de dades sense usuari target
+
+    userSubset = data3[data3['Book_id'].isin(dataInput['Book_id'].tolist())] # identifiquem els usr que han valorat les mateixes 
+                                                                                #obres que el target.
+        
+    
+    usr = userSubset.User.tolist()
+    usr = pd.unique(usr).tolist() #identifiquem els usuaris
+
+    data_sim = {
+
+        'User': usr,
+        'Sim': corelation[c][usr].tolist()
+    }
+    
+    df_sim = pd.DataFrame(data_sim, columns = ['User','Sim'])
+
+    topUsers=df_sim.sort_values(by='Sim', ascending=False)[0:K] # Agafem els K usuaris mes similars.  
+    
+    historial = topUsers.merge(data3, left_on='User', right_on='User', how='inner') #historial complet
+    
+    #Calculem els ratings ponderats:
+    historial['weightedRating'] = historial['Sim']*historial['Rating']
+    historial= historial.groupby('Book_id').sum()[['Sim','weightedRating']]
+    historial.columns = ['sum_similarityIndex','sum_weightedRating']
+
+    recommendation_df= pd.DataFrame()
+    recommendation_df['Rating_pred'] = historial['sum_weightedRating']/historial['sum_similarityIndex']
+    recommendation_df['Book_id'] = historial.index
+    recommendation_df=recommendation_df.sort_values(by='Rating_pred', ascending=False)
+    recommendation_df=recommendation_df.reset_index(drop=True)
+    #Eliminem els llibres ja llegits pel target:
+    recommendation_df = recommendation_df[~recommendation_df['Book_id'].isin(dataInput['Book_id'].tolist())] 
+    
+    historial = data3.merge(recommendation_df, left_on='Book_id', right_on='Book_id', how='inner').sort_values(by="Rating_pred", ascending=False)
+    historial = historial.head(n)
+    
+    
+    return historial[["Book_id", "Book","Author","Rating_pred","Rating"]]
+    
+    
+ top10_count = []
+
+K =[1,2,3,4,5,10,15,20,25,30,35,40,45,50]
+
+for k in K:
+
+    for i in range(114):
+        
+        top10 = recom_final(i,pearson_user,k,10)
+        books_target = list(data2.loc[data2["User"]==i]["Book_id"])
+
+        top10_count.append(len(top10[top10['Book_id'].isin(books_target)]))
+        
+sns.countplot(top10_count)
+
+#######################################################################
+##################### SIMILARITATS ENTRE ÍTEMS ########################
+#######################################################################
+
+table_norm = table.subtract(table.mean(axis=1), axis=0).fillna(0) #Centrem les dades
+data2['Rating'] = data2['Rating'].sub(data2.groupby('Book_id')['Rating'].transform('mean'))
+
+pearson_item = table_norm.corr()
+figure(figsize=(8,8))
+plt.imshow(pearson_item, cmap = 'Blues')
+
+def recomendacio_item(c, n=len(data2)):
+    
+    global data2
+
+    dataInput = data2.loc[data2["User"] == c]
+    data_rew = dataInput['Book_id']
+
+    for i in data_rew:
+
+        data_bo = {
+
+            'Book_id': data_rew,
+            'Sim': pearson_item[i][data_rew].tolist()
+                        }
+
+    df_b = pd.DataFrame(data_bo, columns = ['Book_id','Sim'])
+    topBook = df_b.sort_values(by='Sim', ascending=False)
+
+    topratings = topBook.merge(data2, left_on='Book_id', right_on='Book_id', how='inner')#Historial dels llibres
+
+    # Calculem els ratings ponderats utilitzant les puntuacions dels altres usuaris:
+    topratings['weightedRating'] = topratings['Sim']*topratings['Rating'] 
+    auxtopURating2 = topratings.groupby('Book_id').sum()[['Sim','weightedRating']]
+    auxtopURating2.columns = ['sum_similarityIndex','sum_weightedRating']
+
+    recommendation_df_item = pd.DataFrame()
+
+    recommendation_df_item['Score'] = auxtopURating2['sum_weightedRating']/auxtopURating2['sum_similarityIndex']
+        
+    recommendation_df_item['Book_id'] = auxtopURating2.index
+    recommendation_df_item = recommendation_df_item.sort_values(by='Score', ascending=False)
+    recommendation_df_item = recommendation_df_item.reset_index(drop=True)
+
+    data_clean = topratings[["Book","Author","Book_id"]]
+    data_clean=data_clean.drop_duplicates(subset='Book_id', keep="first") #agafem el primer amb major Score.
+
+    dades = recommendation_df_item.merge(data_clean, left_on='Book_id', right_on='Book_id', how='inner')
+    topU = dades.sort_values(by='Score', ascending=False)
+    topU["Rank_Sistema"] = [len(topU)-x for x in range(len(topU))]
+
+    dataInput = dataInput.sort_values(by='Book_id', ascending=False)
+    dataInput["Rank_real"] = [len(dataInput)-x for x in range(len(dataInput))]
+    aux = topU[["Book_id","Rank_Sistema","Score"]]
+    recom_final = aux.merge(dataInput, left_on='Book_id', right_on='Book_id', how='inner').sort_values(by='Rank_real', ascending=False)
+        
+    recom_final=recom_final.reset_index(drop=True)
+    recom_final["Score"]=recom_final["Score"].replace(np.nan,0)
+    
+    recom_final=recom_final.merge(mean_item,left_on='Book_id', right_on='Book_id', how='inner')
+    
+    recom_final["Pred"] = recom_final["Score"]+recom_final["Mean_rating"]
+    recom_final["Real"] = recom_final["Rating"]+recom_final["Mean_rating"]
+    
+    recom_final = recom_final[["Book_id","Rank_Sistema","Rank_real","Pred","Real","Book","Author"]]
+
+    
+    return recom_final[0:n]
+    
+######## nDCG #######
+    
+def metric(user):
+
+    sistem_rank=recomendacio_item(user)
+    
+    DCG = 0
+    IDCG = 0
+
+    for i in range(len(sistem_rank)):
+        
+        DCG+=(2**(sistem_rank["Rank_Sistema"][i])-1)/math.log(i+2,2) 
+        IDCG+=(2**(sistem_rank["Rank_real"][i])-1)/math.log(i+2,2)
+
+    if IDCG>0:    
+        
+        return DCG/IDCG
+        
+nDCG_item = []
+for i in range(114):
+    nDCG_item.append(metric(i))
+
+nDCG_mean = sum(nDCG_item)/len(nDCG_item)
+nDCG_mean
+
+##### MR ######
+
+sum_MRR =0
+count = 0
+
+for g in range(114):
+
+    r=recomendacio_item(g)
+
+    if len(r)>0:
+
+        sum_MRR+=1/((list(r["Rank_Sistema"])).index(max(r["Rank_real"]))+1)
+        count+=1
+            
+sum_MRR/count
+
+#### RMSE ####
+
+def rmse(usr):
+    
+    r=recomendacio_item(usr)
+    MSE = np.square(np.subtract(r["Pred"],r["Real"])).mean()
+    
+    return math.sqrt(MSE)
+    
+lista = []
+
+for i in range(114):
+    lista.append(rmse(i))    
+    
+RMSE = sum(lista)/len(lista)
+
+###### Accuracy #########
+
+def real_cat(row):  
+    if row['Real'] >= 3.5:
+        return 1
+    return 0
+
+def pred_cat(row):  
+    if row['Pred'] > 3.5:
+        return 1
+    return 0
+    
+y_real_aux = []
+y_pred_aux = []
+
+for i in range(114):
+        
+    t = recomendacio_item(i)
+
+    if len(t)>0:
+
+        t['Real_cat'] = t.apply(lambda row: real_cat(row), axis=1)
+        t['Pred_cat'] = t.apply(lambda row: pred_cat(row), axis=1)
+        
+        y_real_aux.append(t['Real_cat'])
+        y_pred_aux.append(t['Pred_cat'])    
+        
+        
+ y_real = []
+y_pred = []
+
+for i in range(len(y_real_aux)):
+    
+    y_real.append(list(y_real_aux[i].values))
+    y_pred.append(list(y_pred_aux[i].values))
+    
+y_real = list(itertools.chain(*y_real))
+y_pred = list(itertools.chain(*y_pred))
+
+accuracy_score(y_real, y_pred)
+
+
+fpr, tpr,_ = metrics.roc_curve(y_real,  y_pred)
+auc = metrics.roc_auc_score(y_real, y_pred)
+
+plt.plot(fpr,tpr,label="AUC="+str(auc))
+plt.ylabel('True Positive Rate')
+plt.xlabel('False Positive Rate')
+plt.legend(loc=4)
+plt.show()
+
+
+########### PRECISIO@K ############
+
+
+book_ids = []
+
+for col in table.columns:
+    book_ids.append(col)
+    
+    
+def recom_item(c, n=len(data2)):
+    
+    global data2
+
+    recommendation_top = {
+
+        'User':[],
+        'Book':[],
+        'Author':[],
+        'Rting_Pred':[],
+        'Book_id':[]
+
+        }
+
+    aux ={
+
+        'Book_id':[],
+        'Sim':[]
+        }
+
+
+    dataInput = data2.loc[data2["User"] == c]
+    data_rew = dataInput['Book_id']
+
+
+    for i in data_rew:
+
+        data_bo = {
+
+            'Book_id': book_ids,
+            'Sim': pearson_item[i][book_ids].tolist()
+                    }
+
+        df_b = pd.DataFrame(data_bo, columns = ['Book_id','Sim'])
+
+        topBook = df_b.sort_values(by='Sim', ascending=False)[0:1] #Agafem el mes similar
+
+        aux["Book_id"].append(topBook.Book_id.tolist()[0])
+        aux["Sim"].append(topBook.Sim.tolist()[0])
+
+        #Ara ja tenim un llibre similar per a cada llibre llegit.
+
+    aux = pd.DataFrame(aux)
+    topratings = aux.merge(data2, left_on='Book_id', right_on='Book_id', how='inner') #historial llibres
+
+    # Calculem els ratings ponderats utilitzant les puntuacions dels altres usuaris:
+    topratings['weightedRating'] = topratings['Sim']*topratings['Rating'] 
+    auxtopURating2 = topratings.groupby('Book_id').sum()[['Sim','weightedRating']]
+    auxtopURating2.columns = ['sum_similarityIndex','sum_weightedRating']
+
+    recommendation_df_item = pd.DataFrame()
+
+    recommendation_df_item['Score'] = auxtopURating2['sum_weightedRating']/auxtopURating2['sum_similarityIndex']
+    recommendation_df_item['Book_id'] = auxtopURating2.index
+    recommendation_df_item = recommendation_df_item.sort_values(by='Score', ascending=False)
+    recommendation_df_item = recommendation_df_item.reset_index(drop=True)
+    topU=recommendation_df_item.merge(data2, left_on='Book_id', right_on='Book_id', how='inner')
+    
+    return topU[["Book_id","Book","Author"]][0:n]
+    
+top10_count_item_pos = []
+
+for i in range(114):
+    
+    top10_prova = recom_item(i,10)
+    books_target_prova = data2.loc[data2["User"]==i]
+    target = books_target_prova.merge(mean_item, left_on='Book_id', right_on='Book_id', how='inner')
+    target["Rating_real"] = target["Rating"]+target["Mean_rating"]
+    books_target = list(target[target["Rating_real"]>=3.5]["Book_id"])
+    
+    top10_count_item_pos.append(len(top10[top10['Book_id'].isin(books_target)]))
+    
+sum(top10_count_item_pos)
+
+sns.countplot(top10_count_item)
+
+
+top10_count_item_neg = []
+
+for i in range(114):
+    
+    top10_prova = recom_item(i,10)
+    books_target_prova = data2.loc[data2["User"]==i]
+    target = books_target_prova.merge(mean_item, left_on='Book_id', right_on='Book_id', how='inner')
+    target["Rating_real"] = target["Rating"]+target["Mean_rating"]
+    books_target = list(target[target["Rating_real"]<3.5]["Book_id"])
+    
+    top10_count_item_neg.append(len(top10[top10['Book_id'].isin(books_target)]))
+    
+sum(top10_count_item_neg)
+
+sns.countplot(top10_count_item_neg)
+
+
+#### Ordenant per frequències d'aparició ####
+
+def recomendacio_item_mod(c,n=len(data2)):
+    
+    global data2
+
+    dataInput = data2.loc[data2["User"] == c]
+    data_rew = dataInput['Book_id']
+
+    for i in data_rew:
+
+        data_bo = {
+
+            'Book_id': data_rew,
+            'Sim': pearson_item[i][data_rew].tolist()
+                        }
+
+    df_b = pd.DataFrame(data_bo, columns = ['Book_id','Sim'])
+    topBook = df_b.sort_values(by='Sim', ascending=False)
+
+    topratings = topBook.merge(data2, left_on='Book_id', right_on='Book_id', how='inner')#Historial dels llibres
+
+    # Calculem els ratings ponderats utilitzant les puntuacions dels altres usuaris:
+    topratings['weightedRating'] = topratings['Sim']*topratings['Rating'] 
+    auxtopURating2 = topratings.groupby('Book_id').sum()[['Sim','weightedRating']]
+    auxtopURating2.columns = ['sum_similarityIndex','sum_weightedRating']
+
+    recommendation_df_item = pd.DataFrame()
+
+    recommendation_df_item['Score'] = auxtopURating2['sum_weightedRating']/auxtopURating2['sum_similarityIndex']
+    recommendation_df_item['Book_id'] = auxtopURating2.index
+    recommendation_df_item = recommendation_df_item.sort_values(by='Score', ascending=False)
+    recommendation_df_item = recommendation_df_item.reset_index(drop=True)
+    
+    aux=data2.merge(recommendation_df_item, left_on='Book_id', right_on='Book_id', how='inner') ##
+    
+    df_input = dataInput[dataInput['Book_id'].isin(aux["Book_id"])]
+    df_input["Rank_real"] = [len(df_input)-x for x in range(len(df_input))]
+
+    df_recom = aux[aux['Book_id'].isin(df_input["Book_id"])]
+    df_recom = df_recom.groupby(['Book_id'])['Book_id'].count().reset_index(name='Count')
+    df_recom = df_recom.sort_values(by='Count', ascending=False)
+    df_recom["Rank_Sistema"] = [len(df_recom)-x for x in range(len(df_recom))]
+
+    topU = df_input.merge(df_recom, left_on='Book_id', right_on='Book_id', how='inner')
+    topU = topU.merge(dataInput, left_on='Book_id', right_on='Book_id', how='inner')
+    topU = topU.drop_duplicates(subset='Book_id', keep="first")[["Book_id","Rank_Sistema","Rank_real"]]
+
+    return topU[0:n]
+
+
+#### nDCG #######
+
+def metric_mod(user):
+
+    rank_sistem=recomendacio_item_mod(user)
+    
+    DCG = 0
+    IDCG = 0
+
+    for i in range(len(rank_sistem)):
+        
+        DCG+=(2**(rank_sistem["Rank_Sistema"][i])-1)/math.log(i+2,2) 
+        IDCG+=(2**(rank_sistem["Rank_real"][i])-1)/math.log(i+2,2)
+
+    if IDCG>0:    
+        
+        return DCG/IDCG
+    
+nDCG_item_mod = []
+
+for i in range(114):
+    nDCG_item_mod.append(metric_mod(i))
+    
+sum(nDCG_item_mod)/(len(nDCG_item_mod))
+
+#### MRR ######
+
+sum_MRR=0
+count=0
+
+for g in range(114):
+
+    r=recomendacio_item_mod(g)
+
+    if len(r)>0:
+        sum_MRR+=1/((list(r["Rank_Sistema"])).index(max(r["Rank_real"]))+1)
+        count+=1
+        
+sum_MRR/count
+
+
+#### precisió@10 #####
+
+
+def recom_item_final(c,n=len(data2)):
+    
+    global data2
+
+    recommendation_top = {
+
+        'User':[],
+        'Book':[],
+        'Author':[],
+        'Rting_Pred':[],
+        'Book_id':[]
+
+        }
+
+    aux ={
+
+        'Book_id':[],
+        'Sim':[]
+        }
+
+
+    dataInput = data2.loc[data2["User"] == c]
+    data_rew = dataInput['Book_id']
+
+
+    for i in data_rew:
+
+        data_bo = {
+
+            'Book_id': list(data2["Book_id"]),
+            'Sim': pearson_item[i][data2["Book_id"]].tolist()
+                    }
+
+        df_b = pd.DataFrame(data_bo, columns = ['Book_id','Sim'])
+
+        topBook = df_b.sort_values(by='Sim', ascending=False)[0:1] #Agafem el mes similar
+
+        aux["Book_id"].append(topBook.Book_id.tolist()[0])
+        aux["Sim"].append(topBook.Sim.tolist()[0])
+
+        #Ara ja tenim un llibre similar per a cada llibre llegit..
+
+    aux = pd.DataFrame(aux)
+    topratings = aux.merge(data2, left_on='Book_id', right_on='Book_id', how='inner') #historial llibres
+
+    # Calculem els ratings ponderats utilitzant les puntuacions dels altres usuaris:
+    topratings['weightedRating'] = topratings['Sim']*topratings['Rating'] 
+    auxtopURating2 = topratings.groupby('Book_id').sum()[['Sim','weightedRating']]
+    auxtopURating2.columns = ['sum_similarityIndex','sum_weightedRating']
+
+    recommendation_df_item = pd.DataFrame()
+
+    recommendation_df_item['Score'] = auxtopURating2['sum_weightedRating']/auxtopURating2['sum_similarityIndex']
+    recommendation_df_item['Book_id'] = auxtopURating2.index
+    recommendation_df_item = recommendation_df_item.sort_values(by='Score', ascending=False)
+    recommendation_df_item = recommendation_df_item.reset_index(drop=True)
+    
+    aux=data2.merge(recommendation_df_item, left_on='Book_id', right_on='Book_id', how='inner') ##
+    df_input = dataInput[dataInput['Book_id'].isin(aux["Book_id"])]
+    df_input["Rank_real"] = [len(df_input)-x for x in range(len(df_input))]
+
+    df_recom = aux[aux['Book_id'].isin(df_input["Book_id"])]
+    df_recom = df_recom.groupby(['Book_id'])['Book_id'].count().reset_index(name='Count')
+    df_recom = df_recom.sort_values(by='Count', ascending=False)
+    df_recom["Rank_Sistema"] = [len(df_recom)-x for x in range(len(df_recom))]
+
+    topU = df_input.merge(df_recom, left_on='Book_id', right_on='Book_id', how='inner')
+    topU = topU.merge(data2, left_on='Book_id', right_on='Book_id', how='inner')
+    topU = topU.drop_duplicates(subset='Book_id', keep="first")[["Book_id","Rank_Sistema","Rank_real"]]
+
+    return topU[0:n]
+    
+    
+    
+ top10_count_item_pos = []
+
+for i in range(114):
+    
+    top10_prova = recom_item_final(i,10)
+    books_target_prova = data2.loc[data2["User"]==i]
+    target = books_target_prova.merge(mean_item, left_on='Book_id', right_on='Book_id', how='inner')
+    target["Rating_real"] = target["Rating"]+target["Mean_rating"]
+    books_target = list(target[target["Rating_real"]>=3.5]["Book_id"])
+    
+    top10_count_item_pos.append(len(top10[top10['Book_id'].isin(books_target)]))
+    
+sum(top10_count_item_pos)
+sns.countplot(top10_count_item_pos)
+
+top10_count_item_neg = []
+
+for i in range(114):
+    
+    top10_prova = recom_item_final(i,10)
+    books_target_prova = data2.loc[data2["User"]==i]
+    target = books_target_prova.merge(mean_item, left_on='Book_id', right_on='Book_id', how='inner')
+    target["Rating_real"] = target["Rating"]+target["Mean_rating"]
+    books_target = list(target[target["Rating_real"]<3.5]["Book_id"])
+    
+    top10_count_item_neg.append(len(top10[top10['Book_id'].isin(books_target)]))
+    
+sum(top10_count_item_neg)
+sns.countplot(top10_count_item_neg)
+
+
+################################################################
+################## FACTORITZACIÓ DE MATRIUS ####################
+################################################################
+
+def recomendacio_final(c, n=len(data2)):
+    
+    global data2
+
+    dataInput = data2.loc[data2["User"] == c]
+    book_rew = dataInput["Book_id"]
+    book_ids = data2['Book_id']
+
+    for i in book_ids:
+
+        data_bo = {
+
+            'Book_id': book_ids,
+            'Sim': pearson_item[i][book_ids].tolist()
+                        }
+
+    df_b = pd.DataFrame(data_bo, columns = ['Book_id','Sim'])
+    topBook = df_b.sort_values(by='Sim', ascending=False)
+
+    topratings = topBook.merge(data2, left_on='Book_id', right_on='Book_id', how='inner')#Historial dels llibres
+
+    # Calculem els ratings ponderats utilitzant les puntuacions dels altres usuaris:
+    topratings['weightedRating'] = topratings['Sim']*topratings['Rating'] 
+    auxtopURating2 = topratings.groupby('Book_id').sum()[['Sim','weightedRating']]
+    auxtopURating2.columns = ['sum_similarityIndex','sum_weightedRating']
+
+    recommendation_df_item = pd.DataFrame()
+
+    recommendation_df_item['Score'] = auxtopURating2['sum_weightedRating']/auxtopURating2['sum_similarityIndex']
+        
+    recommendation_df_item['Book_id'] = auxtopURating2.index
+    recommendation_df_item = recommendation_df_item.sort_values(by='Score', ascending=False)
+    recommendation_df_item = recommendation_df_item.reset_index(drop=True)
+
+    data_clean = topratings[["Book","Author","Book_id"]]
+    data_clean=data_clean.drop_duplicates(subset='Book_id', keep="first")
+
+    dades = recommendation_df_item.merge(data_clean, left_on='Book_id', right_on='Book_id', how='inner').sort_values(by='Book_id')
+    topU = dades.sort_values(by='Score', ascending=False)
+    topU["Rank_Sistema"] = [len(topU)-x for x in range(len(topU))]
+
+    dataInput = dataInput.sort_values(by='Book_id', ascending=False)
+    dataInput["Rank_real"] = [len(dataInput)-x for x in range(len(dataInput))]
+    aux = topU[["Book_id","Rank_Sistema","Score"]]
+    recom_final = aux.merge(dataInput, left_on='Book_id', right_on='Book_id', how='inner').sort_values(by='Rank_real', ascending=False)
+        
+    recom_final=recom_final.reset_index(drop=True)
+    recom_final["Score"]=recom_final["Score"].replace(np.nan,0)
+
+    return recom_final[0:n]
+
+
+test = data2.sample(n= round(len(data2)*0.30),random_state = 1)
+test_aux = data2.sample(n= round(len(data2)*0.30),random_state = 1)
+
+train = data2[~data2['Book_id'].isin(test['Book_id'].tolist())]
+test["Rating"] = 0
+
+data_train = pd.concat([test,train]) #total base de dades com test 0.
+table_factor = data_train.pivot_table(index='User',columns='Book_id', values='Rating',aggfunc=np.max).fillna(0) 
+
+def matrix_factorization(R,P,Q,K,steps=20,alpha=0.005,lam=0.0007):
+
+    Q=Q.T
+    
+    for step in range(steps):
+        for i in range(len(R)):
+            for j in range(len(R[i])):
+                
+                if R[i][j]>0:
+                    
+                    eij=R[i][j]-np.dot(P[i,:],Q[:,j])
+                    
+                    for k in range(K):
+                        
+                        P[i][k] =  P[i][k] + alpha * (2*eij*Q[k][j]-lam*P[i][k])
+                        Q[k][j] =  Q[k][j] + alpha * (2*eij*P[i][k]-lam*Q[k][j])
+                        
+        eR = np.dot(P,Q)
+        e=0
+        
+        for i in range(len(R)):
+            
+            for j in range(len(R[i])):
+                
+                if R[i][j]>0:
+                    
+                    e = e + pow(R[i][j] - np.dot(P[i,:],Q[:,j]),2)
+                    
+        if e < 0.001:
+            
+            break
+
+    return P,Q.T
+   
+   
+   ################### nDCG #####################
+def rank(c):
+    
+    global R_hat
+    global data2
+        
+    R_hat = R_hat.T    
+    
+    target = data2.loc[data2["User"]==c]
+    target = target.sort_values(by="Rating", ascending=True)
+
+    rank_sistem=pd.DataFrame()
+
+    rank_sistem["Book_id"] = list(R_hat[c].index)
+    rank_sistem["Pred_rating"] = list(R_hat[c].values)
+    rank_sistem = rank_sistem[rank_sistem['Book_id'].isin(target['Book_id'].tolist())]
+    rank_sistem = rank_sistem.reset_index(drop=True)
+    rank_sistem=rank_sistem.sort_values(by="Pred_rating", ascending=False)
+    rank_sistem["Ranking_sistema"] = list(rank_sistem.index[::-1])
+    rank_sistem["Ranking_sistema"] = [x+1 for x in rank_sistem["Ranking_sistema"] ]
+# 
+
+    df_target = target[target['Book_id'].isin(rank_sistem['Book_id'].tolist())]
+    df_target=df_target.sort_values(by="Rating", ascending=True)
+    true_rank = df_target.reset_index(drop=True)
+    true_rank["Ranking_Ideal"] = true_rank.index
+    df_target = true_rank.reindex(index=true_rank.index[::-1])
+    df_target["Ranking_Ideal"] = [x+1 for x in df_target["Ranking_Ideal"] ]
+    df_target = df_target[df_target['Book_id'].isin(rank_sistem['Book_id'].tolist())]
+
+    rank_nDCG = df_target.merge(rank_sistem, left_on='Book_id', right_on='Book_id', how='inner')
+
+    return rank_nDCG
+    
+    
+ def metric(user):
+
+    sistem_rank=rank(user)
+    
+    DCG = 0
+    IDCG = 0
+
+    for i in range(len(sistem_rank)):
+        
+        DCG+=sistem_rank["Ranking_sistema"][i]/math.log(i+2,2) #Sumem 2 encomptes de 1 perque els indexos cuadrin
+        IDCG+=sistem_rank["Ranking_Ideal"][i]/math.log(i+2,2)
+
+    if IDCG>0:    
+        
+        return DCG/IDCG
+
+
+############ ACCURACY ################
+def real_cat(row):  
+    if row["Rating"]>= 3.5:
+        return 1
+    return 0
+
+def pred_cat(row):  
+    if row["Pred_rating"] >= 3.5:
+        return 1
+    return 0
+
+import operator
+
+######### Precisio@K ########3
+
+def recom_matrix_precisionK(c,n=10):
+    recom = pd.DataFrame(R_hat.T[c].sort_values(ascending=False))
+    recom["Book_id"]= recom.index
+    
+#### IMPLEMENTAICÓ #####
+
+k = [x+1 for x in range(1,50)]
+
+evaluacio_factorK ={
+    
+    "K":k,
+    "Rmse":[],
+    "nDCG":[],
+    "MRR":[],
+    "Accuracy":[],
+    "@K":[]
+}
+
+R = np.array(table_factor)
+R_test = np.array(table_norm.fillna(0))
+
+NoUsers = len(R)
+NoItems = len(R[0])
+
+for K in k:
+
+    P = np.random.rand(NoUsers,K)
+    Q = np.random.rand(NoItems, K)
+
+    nP,nQ = matrix_factorization(R,P,Q,K)
+    R_hat = np.dot(nP,nQ.T)
+
+    ###################################
+    ############## RMSE ###############
+    ###################################
+
+    R_hat=pd.DataFrame(R_hat)
+    s=R_hat[test_aux]
+    y_yhat=0
+    count = 0
+
+    for i in test["User"]:
+
+        target = test[test["User"]==i]
+        s=R_hat[list(target["Book_id"])]
+        y_yhat += sum(np.array((list(np.subtract(list(target["Rating"].values),list(s.iloc[i].values)))))**2)
+        count+=1
+
+    evaluacio_factorK["Rmse"].append(math.sqrt(y_yhat/count))
+
+
+    ###################################
+    ############## nDCG ###############
+    ###################################
+
+    nDCG = 0
+    count=0
+
+    for i in range(114):
+
+        z = metric(i)
+
+        if z != None:
+
+            nDCG+=z
+            count+=1
+
+    evaluacio_factorK["nDCG"].append(nDCG/count)
+
+    ###################################
+    ############## MRR ################
+    ###################################
+
+    MRR=[]
+
+    for g in range(114):
+
+        sum_MRR=0
+        count=0
+        r=rank(g)
+
+        if len(r)>0:
+            sum_MRR+=1/((list(r["Ranking_sistema"])).index(max(r["Ranking_Ideal"]))+1)
+            count+=1
+
+            MRR.append(sum_MRR/count)
+    MRR_estim =sum(MRR)/len(MRR)
+    evaluacio_factorK["MRR"].append(MRR_estim)
+
+    ########################################
+    ############## Accuracy ################
+    ########################################
+
+    yreal =[]
+    ypred=[]
+
+    for i in test["User"]:
+
+        target = test_aux[test_aux["User"]==i]
+        s=R_hat[list(target["Book_id"])]
+
+        s_i = list(s.iloc[i].values) #prediccions
+        s_i2 = list(map(operator.add, s_i,list(mean_item.iloc[list(target["Book_id"])]["Mean_rating"].values))) #pred + mean
+
+        targ_rat = list(map(operator.add, target["Rating"],list(mean_item.iloc[list(target["Book_id"])]["Mean_rating"].values))) #real + mean
+        
+        aux = pd.DataFrame({'Rating':targ_rat,"Pred_rating":s_i2}, columns=["Rating","Pred_rating"])
+
+        aux["Real_cat"]=aux.apply(lambda row: real_cat(row),axis=1)
+                     
+        aux["Pred_cat"]=aux.apply(lambda row: pred_cat(row),axis=1)
+        
+        yreal.append(aux["Real_cat"])
+        ypred.append(aux["Pred_cat"])
+        
+    y_real4 = []
+    y_pred4 = []
+
+    for i in range(len(yreal)):
+
+        y_real4.append(list(yreal[i].values))
+        y_pred4.append(list(ypred[i].values))
+
+    y_real4 = list(itertools.chain(*y_real4))
+    y_pred4 = list(itertools.chain(*y_pred4))
+    
+
+    evaluacio_factorK["Accuracy"].append(accuracy_score(y_real4,y_pred4))
+
+    ########################################
+    ############## Presicio@K ################
+    ########################################
+    
+    auxiliar = []
+    
+    for i in range(114):
+        top10 = recom_matrix_precisionK(i)
+        books_target = list(data2.loc[data2["User"]==i]["Book_id"])
+        auxiliar.append(len(top10[top10['Book_id'].isin(books_target)]))
+            
+    evaluacio_factorK["@K"].append(sum(auxiliar)/len(auxiliar))
+    
+##### GRÀFICS #####
+
+plt.plot(evaluacio_factorK["K"],evaluacio_factorK["Rmse"])
+plt.xlabel("K")
+plt.ylabel("Rmse")
+
+
+evaluacio_factorK["Rmse"].index(min(evaluacio_factorK["Rmse"])) # K = 2
+evaluacio_factorK["Rmse"][0]
+
+plt.plot(evaluacio_factorK["K"],evaluacio_factorK["nDCG"])
+plt.xlabel("K")
+plt.ylabel("nDCG")
+
+evaluacio_factorK["nDCG"].index(max(evaluacio_factorK["nDCG"])) #maxim: K=22
+evaluacio_factorK["nDCG"][20]
+
+plt.plot(evaluacio_factorK["K"],evaluacio_factorK["MRR"])
+plt.xlabel("K")
+plt.ylabel("MRR")
+
+evaluacio_factorK["MRR"].index(max(evaluacio_factorK["MRR"]))  #maxim: K=7
+evaluacio_factorK["MRR"][5]
+
+plt.plot(evaluacio_factorK["K"],evaluacio_factorK["Accuracy"])
+plt.xlabel("K")
+plt.ylabel("Accuracy")
+
+evaluacio_factorK["Accuracy"].index(max(evaluacio_factorK["Accuracy"])) #K=2
+evaluacio_factorK["Accuracy"][0]
+
+plt.plot(evaluacio_factorK["K"],evaluacio_factorK["@K"])
+plt.xlabel("K")
+plt.ylabel("@K")
+
+evaluacio_factorK["@K"].index(max(evaluacio_factorK["@K"])) #K=39
+evaluacio_factorK["@K"][37]
+
+######### CURVA ROC - AUC ##############
+
+def ROC_matrix_fact(K):
+
+    test = data.sample(n= round(len(data)*0.30),random_state = 1)
+    R = np.array(table_factor)
+    R_test = np.array(table.fillna(0))
+    NoUsers = len(R)
+    NoItems = len(R[0])
+    
+    P = np.random.rand(NoUsers,K)
+    Q = np.random.rand(NoItems, K)
+
+    nP,nQ = matrix_factorization(R,P,Q,K)
+    R_hat = np.dot(nP,nQ.T)
+    
+    R_hat=pd.DataFrame(R_hat)
+    s=R_hat[test_aux]
+
+    yreal =[]
+    ypred=[]
+
+    for i in test["User"]:
+
+        target = test_aux[test_aux["User"]==i]
+        s=R_hat[list(target["Book_id"])]
+
+        s_i = list(s.iloc[i].values) #prediccions
+        s_i2 = list(map(operator.add, s_i,list(mean_item.iloc[list(target["Book_id"])]["Mean_rating"].values))) #pred + mean
+
+        targ_rat = list(map(operator.add, target["Rating"],list(mean_item.iloc[list(target["Book_id"])]["Mean_rating"].values))) #real + mean
+        
+        aux = pd.DataFrame({'Rating':targ_rat,"Pred_rating":s_i2}, columns=["Rating","Pred_rating"])
+
+        aux["Real_cat"]=aux.apply(lambda row: real_cat(row),axis=1)
+                     
+        aux["Pred_cat"]=aux.apply(lambda row: pred_cat(row),axis=1)
+        
+        yreal.append(aux["Real_cat"])
+        ypred.append(aux["Pred_cat"])
+        
+    y_real4 = []
+    y_pred4 = []
+
+    for i in range(len(yreal)):
+
+        y_real4.append(list(yreal[i].values))
+        y_pred4.append(list(ypred[i].values))
+
+    y_real4 = list(itertools.chain(*y_real4))
+    y_pred4 = list(itertools.chain(*y_pred4))
+    
+    
+    fpr4, tpr4,_ = metrics.roc_curve(y_real4,  y_pred4)
+    auc4 = metrics.roc_auc_score(y_real4, y_pred4)
+
+    plt.plot(fpr4,tpr4,label="AUC="+str(auc4))
+    plt.ylabel('True Positive Rate')
+    plt.xlabel('False Positive Rate')
+    plt.legend(loc=4)
+    plt.show()
+    
+    
+ ROC_matrix_fact(2)
+ ROC_matrix_fact(22)
+ ROC_matrix_fact(7)
+ ROC_matrix_fact(39)
