@@ -123,6 +123,14 @@ sns.countplot(data["Rating"])
 
 data.nunique() 
 
+################################################################################
+####### AMB CODI R: HISTOGRAMA VALORACIONS (TOTA LA RESTA EN PYTHON!) ##########
+################################################################################
+t<-sort(table(GoodReads_Data$Book_id), decreasing = TRUE)
+
+barplot(t, col="grey", main="Freqüència de les valoracions",xlab="Book_id")
+
+
 ######################################################
 ######### MÈTODE SIMILARITAT ENTRE USUARIS ###########
 ######################################################
