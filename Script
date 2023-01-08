@@ -116,19 +116,17 @@ import itertools
 from sklearn import metrics
 
 data = pd.read_csv("GoodReads_Data.csv",sep = ';')
-data2 = pd.read_csv("GoodReads_Data.csv",sep = ';')
+data2 = data.copy()
 
-plt.subplots(figsize=(7,5))
-sns.countplot(data["Rating"])
+sns.histplot(data["Rating"],binwidth=0.25)
 
 data.nunique() 
 
-################################################################################
-####### AMB CODI R: HISTOGRAMA VALORACIONS (TOTA LA RESTA EN PYTHON!) ##########
-################################################################################
-t<-sort(table(GoodReads_Data$Book_id), decreasing = TRUE)
-
-barplot(t, col="grey", main="Freqüència de les valoracions",xlab="Book_id")
+data_agg = data.groupby('Book_id').agg(mean_rating = ("Rating","mean"), number_of_ratings=('Book_id',"count"))
+data_agg = data_agg.sort_values(by="number_of_ratings", ascending=False)
+data_agg["Book_id."] = data_agg.index
+data_agg["Book_id."]=data_agg["Book_id."].astype('category',copy=False)
+sns.jointplot(x="mean_rating", y="number_of_ratings", data=data_agg)
 
 
 ######################################################
@@ -301,48 +299,12 @@ def K_tunning(K):
     return nDCG_metric_estim
     
 nDCG_K=K_tunning(K)
+
 K_tuning = pd.DataFrame()
 K_tuning["K"] = K
-K_tuning["nDCG"] = nDCG_K
-plt.plot(K_tuning["K"],K_tuning["nDCG"])
-plt.xlabel("K")
-plt.ylabel("nDCG")
+K_tuning["Metric"] = ["nDCG"] * len(K)
+K_tuning["Value"] = nDCG_K
 
-#### RMSE######
-
-def rmse(usr,K):
-    
-    r=evaluacio_user(usr, pearson_user, K=K)
-    MSE = np.square(np.subtract(r["Rating_real"],r["Rating"])).mean()         
-    return math.sqrt(MSE)
-    
-K=[1,2,3,5,10,15,20,25,30,35,40,45,50]
-
-def K_tunning_rmse(K):
-    
-    rmse_metric_estim= []
-
-    for k in K:
-        
-        rmse_metric=[]
-
-        for i in range(114):
-
-            rmse_metric.append(rmse(i, k))
-
-        rmse_metric_estim.append(np.nanmean(rmse_metric))
-        
-    return rmse_metric_estim
-    
- rmse_k = K_tunning_rmse(K)
- K=[1,2,3,5,10,15,20,25,30,35,40,45,50]
-
-K_tuning_rmse = pd.DataFrame()
-K_tuning_rmse["K"] = K
-K_tuning_rmse["rmse"] = rmse_k
-plt.plot(K_tuning_rmse["K"],K_tuning_rmse["rmse"])
-plt.xlabel("K")
-plt.ylabel("rmse")
 
 ######## MRR ##############
 
@@ -368,14 +330,13 @@ def K_tunning_MRR(K):
     return MRR_k
     
     
-K=[1,2,3,4,5,10,15,20,25,30,35,40,45,50]
 MRR_K = K_tunning_MRR(K)
-K_tuning_mrr = pd.DataFrame()
-K_tuning_mrr["K"] = K
-K_tuning_mrr["MRR"] = MRR_K
-plt.plot(K_tuning_mrr["K"],K_tuning_mrr["MRR"])
-plt.xlabel("K")
-plt.ylabel("MRR")
+
+K_tuning_MRR = pd.DataFrame()
+K_tuning_MRR["K"] = K
+K_tuning_MRR["Metric"] = ["MRR"] * len(K)
+K_tuning_MRR["Value"] = MRR_K
+K_tuning_User = K_tuning.append(K_tuning_MRR, ignore_index = True)
 
 ##### ACCURACY ########3
 
@@ -426,10 +387,15 @@ for k in K:
 
 K_tuning_accuracy= pd.DataFrame()
 K_tuning_accuracy["K"] = K
-K_tuning_accuracy["Accuracy"] = accuracy
-plt.plot(K_tuning_accuracy["K"],K_tuning_accuracy["Accuracy"])
-plt.xlabel("K")
-plt.ylabel("Accuracy")
+K_tuning_accuracy["Metric"]= ["Accuracy"]*len(K)
+K_tuning_accuracy["Value"] = accuracy
+K_tuning_User = K_tuning_User.append(K_tuning_accuracy, ignore_index = True)
+
+sns.set(rc={'figure.figsize':(9.7,7.27)})
+sns.lineplot(
+    data=K_tuning_User, x="K", y="Value", hue="Metric",
+    legend="full"
+)
 
 ####### ROC - AUC K =1 ###########
 
@@ -523,7 +489,7 @@ def recom_final(c,corelation,K,n):
     return historial[["Book_id", "Book","Author","Rating_pred","Rating"]]
     
     
- top10_count = []
+top10_count = []
 
 K =[1,2,3,4,5,10,15,20,25,30,35,40,45,50]
 
@@ -541,6 +507,18 @@ sns.countplot(top10_count)
 ################################################################
 ################## FACTORITZACIÓ DE MATRIUS ####################
 ################################################################
+
+table_norm = table.subtract(table.mean(axis=1), axis=0).fillna(0) #Centrem les dades
+data2['Rating'] = data2['Rating'].sub(data2.groupby('Book_id')['Rating'].transform('mean'))
+
+pearson_item = table_norm.corr()
+
+
+book_ids = []
+
+for col in table.columns:
+    book_ids.append(col)
+    
 
 def recomendacio_final(c, n=len(data2)):
     
@@ -953,7 +931,6 @@ def ROC_matrix_fact(K):
  ROC_matrix_fact(7)
  ROC_matrix_fact(39)
 
-
 #######################################################################
 ##################### SIMILARITATS ENTRE ÍTEMS ########################
 #######################################################################
@@ -1064,22 +1041,6 @@ for g in range(114):
             
 sum_MRR/count
 
-#### RMSE ####
-
-def rmse(usr):
-    
-    r=recomendacio_item(usr)
-    MSE = np.square(np.subtract(r["Pred"],r["Real"])).mean()
-    
-    return math.sqrt(MSE)
-    
-lista = []
-
-for i in range(114):
-    lista.append(rmse(i))    
-    
-RMSE = sum(lista)/len(lista)
-
 ###### Accuracy #########
 
 def real_cat(row):  
@@ -1109,7 +1070,7 @@ for i in range(114):
         
         
  y_real = []
-y_pred = []
+ y_pred = []
 
 for i in range(len(y_real_aux)):
     
@@ -1433,3 +1394,8 @@ for i in range(114):
     
 sum(top10_count_item_neg)
 sns.countplot(top10_count_item_neg)
+
+
+
+
+
